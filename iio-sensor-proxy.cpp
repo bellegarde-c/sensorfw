@@ -61,7 +61,7 @@ typedef struct {
 	/* Light */
 	gdouble previous_level;
 	gboolean uses_lux;
-	gboolean light_avaliable;
+	gboolean light_available;
 	std::shared_ptr<repowerd::LightSensor> light_sensor;
 
 	/* Compass */
@@ -100,7 +100,7 @@ driver_type_exists (SensorData *data,
 	case DRIVER_TYPE_ACCEL:
 		return (data->accel_avaliable == TRUE);
 	case DRIVER_TYPE_LIGHT:
-		return (data->light_avaliable == TRUE);
+		return (data->light_available == TRUE);
 	case DRIVER_TYPE_COMPASS:
 		return (data->compass_avaliable == TRUE);
 	case DRIVER_TYPE_PROXIMITY:
@@ -160,7 +160,7 @@ enable_sensorfw_events (SensorData *data,
 		}
 		break;
 	case DRIVER_TYPE_LIGHT:
-		if (data->light_avaliable) {
+		if (data->light_available) {
 			g_debug ("Enabling ambient light sensor");
 			data->light_sensor->enable_light_events ();
 		}
@@ -192,7 +192,7 @@ disable_sensorfw_events (SensorData *data,
 		}
 		break;
 	case DRIVER_TYPE_LIGHT:
-		if (data->light_avaliable) {
+		if (data->light_available) {
 			g_debug ("Disabling ambient light sensor");
 			data->light_sensor->disable_light_events ();
 		}
@@ -609,7 +609,7 @@ send_sensor_availability (SensorData *data)
 	if (data->prox_avaliable)
 		send_dbus_event (data, PROP_HAS_PROXIMITY);
 
-	if (data->light_avaliable)
+	if (data->light_available)
 		send_dbus_event (data, PROP_HAS_AMBIENT_LIGHT);
 
 	if (data->accel_avaliable)
@@ -748,12 +748,12 @@ setup_sensors (SensorData *data)
 	{
 		data->light_sensor = std::make_shared<repowerd::SensorfwLightSensor>(log,
 			the_dbus_bus_address());
-		data->light_avaliable = TRUE;
+		data->light_available = TRUE;
 	}
 	catch (std::exception const &e)
 	{
 		log->log(log_tag, "Failed to create SensorfwLightSensor: %s", e.what());
-		data->light_avaliable = FALSE;
+		data->light_available = FALSE;
 	}
 
 	try
@@ -805,7 +805,7 @@ int main (int argc, char **argv)
 				send_dbus_event(data, PROP_PROXIMITY_NEAR);
 			});
 	}
-	if (data->light_avaliable == TRUE) {
+	if (data->light_available == TRUE) {
 		light_registration = data->light_sensor->register_light_handler(
 			[data](double light) {
 				if (data->previous_level != light) {
