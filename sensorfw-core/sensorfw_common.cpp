@@ -54,6 +54,27 @@ repowerd::Sensorfw::Sensorfw(
     log->log(log_tag, "Got plugin_path %s", plugin_path());
 
     m_socket->initiateConnection(m_sessionid);
+
+    int constexpr timeout_default = 100;
+    auto const result =  g_dbus_connection_call_sync(
+            dbus_connection,
+            dbus_sensorfw_name,
+            plugin_path(),
+            plugin_interface(),
+            "start",
+            g_variant_new("(i)", m_sessionid),
+            NULL,
+            G_DBUS_CALL_FLAGS_NONE,
+            timeout_default,
+            NULL,
+            NULL);
+
+    if (!result)
+    {
+        log->log(log_tag, "failed to start SensorfwSensor");
+        return;
+    }
+    g_variant_unref(result);
 }
 
 repowerd::Sensorfw::~Sensorfw()
@@ -197,30 +218,8 @@ void repowerd::Sensorfw::start()
             if (m_socket->socket()->waitForReadyRead(10))
                 data_recived_impl();
         }
-        m_running = false;
         log->log(log_tag, "Eventloop stopped");
     });
-
-    int constexpr timeout_default = 100;
-    auto const result =  g_dbus_connection_call_sync(
-            dbus_connection,
-            dbus_sensorfw_name,
-            plugin_path(),
-            plugin_interface(),
-            "start",
-            g_variant_new("(i)", m_sessionid),
-            NULL,
-            G_DBUS_CALL_FLAGS_NONE,
-            timeout_default,
-            NULL,
-            NULL);
-
-    if (!result)
-    {
-        log->log(log_tag, "failed to start SensorfwSensor");
-        return;
-    }
-    g_variant_unref(result);
 }
 
 void repowerd::Sensorfw::stop()
@@ -229,28 +228,6 @@ void repowerd::Sensorfw::stop()
         return;
 
     m_running = false;
-
-    int constexpr timeout_default = 100;
-    auto const result =  g_dbus_connection_call_sync(
-            dbus_connection,
-            dbus_sensorfw_name,
-            plugin_path(),
-            plugin_interface(),
-            "stop",
-            g_variant_new("(i)", m_sessionid),
-            NULL,
-            G_DBUS_CALL_FLAGS_NONE,
-            timeout_default,
-            NULL,
-            NULL);
-
-    if (!result)
-    {
-        log->log(log_tag, "failed to stop SensorfwSensor");
-    } else {
-        g_variant_unref(result);
-    }
-
     read_loop.join();
     read_loop = std::thread();
 }
