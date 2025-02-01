@@ -45,32 +45,53 @@ const int OrientationInterpreter::AVG_BUFFER_MAX_SIZE = 10;
 const char* OrientationInterpreter::CPU_BOOST_PATH = "/sys/power/pm_optimizer_rotation";
 typedef PoseData (OrientationInterpreter::*ptrFUN)(int);
 
-OrientationInterpreter::OrientationInterpreter() :
-        accDataSink(this, &OrientationInterpreter::accDataAvailable),
-        topEdge(PoseData::Undefined),
-        face(PoseData::Undefined),
-        previousFace(PoseData::Undefined),
-        orientationData(PoseData::Undefined),
-        cpuBoostFile(CPU_BOOST_PATH)
+namespace {
+inline int squaredLimit(int limit)
+{
+    if (limit <= 0)
+        return 0;
+    if (limit <= int(sqrt(INT_MAX)))
+        return limit * limit;
+    return INT_MAX;
+}
+}
 
+OrientationInterpreter::OrientationInterpreter()
+    : accDataSink(this, &OrientationInterpreter::accDataAvailable)
+    , topEdge(PoseData::Undefined)
+    , face(PoseData::Undefined)
+    , previousFace(PoseData::Undefined)
+    , orientationData(PoseData::Undefined)
+    , cpuBoostFile(CPU_BOOST_PATH)
 {
     addSink(&accDataSink, "accsink");
     addSource(&topEdgeSource, "topedge");
     addSource(&faceSource, "face");
     addSource(&orientationSource, "orientation");
 
-    minLimit = SensorFrameworkConfig::configuration()->value("orientation/overflow_min", QVariant(OVERFLOW_MIN)).toInt();
-    maxLimit = SensorFrameworkConfig::configuration()->value("orientation/overflow_max", QVariant(OVERFLOW_MAX)).toInt();
+    int minLimit = SensorFrameworkConfig::configuration()->value("orientation/overflow_min",
+                                                                 QVariant(OVERFLOW_MIN)).toInt();
+    int maxLimit = SensorFrameworkConfig::configuration()->value("orientation/overflow_max",
+                                                                 QVariant(OVERFLOW_MAX)).toInt();
+    minLimitSquared = squaredLimit(minLimit);
+    maxLimitSquared = squaredLimit(maxLimit);
 
-    angleThresholdPortrait = SensorFrameworkConfig::configuration()->value("orientation/threshold_portrait",QVariant(THRESHOLD_PORTRAIT)).toInt();
-    angleThresholdLandscape = SensorFrameworkConfig::configuration()->value("orientation/threshold_landscape",QVariant(THRESHOLD_LANDSCAPE)).toInt();
-    discardTime = SensorFrameworkConfig::configuration()->value("orientation/discard_time", QVariant(DISCARD_TIME)).toUInt();
-    maxBufferSize = SensorFrameworkConfig::configuration()->value("orientation/buffer_size", QVariant(AVG_BUFFER_MAX_SIZE)).toInt();
+    qCWarning(lcSensorFw) << "minLimit:" << minLimit << minLimitSquared;
+    qCWarning(lcSensorFw) << "maxLimit:" << maxLimit << maxLimitSquared;
+
+    angleThresholdPortrait = SensorFrameworkConfig::configuration()->value("orientation/threshold_portrait",
+                                                                           QVariant(THRESHOLD_PORTRAIT)).toInt();
+    angleThresholdLandscape = SensorFrameworkConfig::configuration()->value("orientation/threshold_landscape",
+                                                                            QVariant(THRESHOLD_LANDSCAPE)).toInt();
+    discardTime = SensorFrameworkConfig::configuration()->value("orientation/discard_time",
+                                                                QVariant(DISCARD_TIME)).toUInt();
+    maxBufferSize = SensorFrameworkConfig::configuration()->value("orientation/buffer_size",
+                                                                  QVariant(AVG_BUFFER_MAX_SIZE)).toInt();
 
     // Open the handle for boosting cpu on changes that affect orientation
     if (cpuBoostFile.exists()) {
-            cpuBoostFile.open(QIODevice::WriteOnly);
-      }
+        cpuBoostFile.open(QIODevice::WriteOnly);
+    }
 }
 
 void OrientationInterpreter::accDataAvailable(unsigned, const AccelerationData* pdata)
@@ -78,9 +99,8 @@ void OrientationInterpreter::accDataAvailable(unsigned, const AccelerationData* 
     data = *pdata;
 
     // Check overflow
-    if (overFlowCheck())
-    {
-        sensordLogT() << "Acc value discarded due to over/underflow";
+    if (overFlowCheck()) {
+        qCInfo(lcSensorFw) << "Acc value" << data.x_ << data.y_ << data.z_ << "discarded due to over/underflow";
         return;
     }
 
@@ -88,17 +108,18 @@ void OrientationInterpreter::accDataAvailable(unsigned, const AccelerationData* 
     dataBuffer.append(data);
 
     // Clear old values from buffer.
-    while (dataBuffer.count() > maxBufferSize || (dataBuffer.count() > 1 && (data.timestamp_ - dataBuffer.first().timestamp_ > discardTime)))
-    {
+    while (dataBuffer.count() > maxBufferSize
+           || (dataBuffer.count() > 1
+               && (data.timestamp_ - dataBuffer.first().timestamp_ > discardTime))) {
         dataBuffer.removeFirst();
     }
 
-    //Calculate average
+    // Calculate average
     float x = 0;
     float y = 0;
     float z = 0;
-    foreach (const AccelerationData& sample, dataBuffer)
-    {
+
+    foreach (const AccelerationData& sample, dataBuffer) {
         x += sample.x_;
         y += sample.y_;
         z += sample.z_;
@@ -120,8 +141,8 @@ void OrientationInterpreter::accDataAvailable(unsigned, const AccelerationData* 
 
 bool OrientationInterpreter::overFlowCheck()
 {
-    int vector = ((data.x_ * data.x_ + data.y_ * data.y_ + data.z_ * data.z_) / 1000);
-    return !((vector >= minLimit) && (vector <= maxLimit));
+    int m = int(data.x_ * data.x_ + data.y_ * data.y_ + data.z_ * data.z_);
+    return m < minLimitSquared || m > maxLimitSquared;
 }
 
 int OrientationInterpreter::orientationCheck(const AccelerationData &data,  OrientationMode mode) const
@@ -138,10 +159,8 @@ PoseData OrientationInterpreter::rotateToPortrait(int rotation)
     newTopEdge.orientation_ = (rotation <= 0) ? PoseData::BottomUp : PoseData::BottomDown;
 
     // Some threshold to switching between portrait modes
-    if (topEdge.orientation_ == PoseData::BottomUp || topEdge.orientation_ == PoseData::BottomDown)
-    {
-        if (abs(rotation) < SAME_AXIS_LIMIT)
-        {
+    if (topEdge.orientation_ == PoseData::BottomUp || topEdge.orientation_ == PoseData::BottomDown) {
+        if (abs(rotation) < SAME_AXIS_LIMIT) {
             newTopEdge.orientation_ = topEdge.orientation_;
         }
     }
@@ -151,14 +170,11 @@ PoseData OrientationInterpreter::rotateToPortrait(int rotation)
 
 PoseData OrientationInterpreter::rotateToLandscape(int rotation)
 {
-
     PoseData newTopEdge = PoseData::Undefined;
     newTopEdge.orientation_ = (rotation <= 0) ? PoseData::LeftUp : PoseData::RightUp;
     // Some threshold to switching between landscape modes
-    if (topEdge.orientation_ == PoseData::LeftUp || topEdge.orientation_ == PoseData::RightUp)
-    {
-        if (abs(rotation) < SAME_AXIS_LIMIT)
-        {
+    if (topEdge.orientation_ == PoseData::LeftUp || topEdge.orientation_ == PoseData::RightUp) {
+        if (abs(rotation) < SAME_AXIS_LIMIT) {
             newTopEdge.orientation_ = topEdge.orientation_;
         }
     }
@@ -166,7 +182,8 @@ PoseData OrientationInterpreter::rotateToLandscape(int rotation)
     return newTopEdge;
 }
 
-PoseData OrientationInterpreter::orientationRotation (const AccelerationData &data, OrientationMode mode, PoseData (OrientationInterpreter::*ptrFUN)(int))
+PoseData OrientationInterpreter::orientationRotation (const AccelerationData &data, OrientationMode mode,
+                                                      PoseData (OrientationInterpreter::*ptrFUN)(int))
 {
     int rotation = orientationCheck(data, mode);
     int threshold = (mode == OrientationInterpreter::Portrait) ? angleThresholdPortrait : angleThresholdLandscape;
@@ -181,8 +198,7 @@ void OrientationInterpreter::processTopEdge()
     ptrFUN rotator;
     OrientationMode mode;
 
-    if (topEdge.orientation_ == PoseData::BottomUp || topEdge.orientation_ == PoseData::BottomDown)
-    {
+    if (topEdge.orientation_ == PoseData::BottomUp || topEdge.orientation_ == PoseData::BottomDown) {
         mode = OrientationInterpreter::Portrait;
         rotator = &OrientationInterpreter::rotateToPortrait;
     } else {
@@ -192,25 +208,26 @@ void OrientationInterpreter::processTopEdge()
 
     newTopEdge = orientationRotation(data, mode, rotator);
 
-    if (newTopEdge.orientation_ == PoseData::Undefined) //not rotate yet, then check for the other threshold
-    {
-        mode = (mode == OrientationInterpreter::Portrait) ? (OrientationInterpreter::Landscape) : (OrientationInterpreter::Portrait);
-        rotator = (rotator == (&OrientationInterpreter::rotateToPortrait)) ? (&OrientationInterpreter::rotateToLandscape) : (&OrientationInterpreter::rotateToPortrait);
+    //not rotate yet, then check for the other threshold
+    if (newTopEdge.orientation_ == PoseData::Undefined) {
+        mode = (mode == OrientationInterpreter::Portrait) ? (OrientationInterpreter::Landscape)
+                                                          : (OrientationInterpreter::Portrait);
+        rotator = (rotator == (&OrientationInterpreter::rotateToPortrait))
+                ? (&OrientationInterpreter::rotateToLandscape)
+                : (&OrientationInterpreter::rotateToPortrait);
         newTopEdge = orientationRotation(data, mode, rotator);
     }
 
     // Propagate if changed
-    if (topEdge.orientation_ != newTopEdge.orientation_)
-    {
+    if (topEdge.orientation_ != newTopEdge.orientation_) {
         // Request CPU clock raise to get smooth desktop rotation
-        if (cpuBoostFile.isOpen())
-        {
+        if (cpuBoostFile.isOpen()) {
             cpuBoostFile.write("1", 1);
             cpuBoostFile.flush();
         }
 
         topEdge.orientation_ = newTopEdge.orientation_;
-        sensordLogT() << "new TopEdge value: " << topEdge.orientation_;
+        qCDebug(lcSensorFw) << "new TopEdge value: " << topEdge.orientation_;
         topEdge.timestamp_ = data.timestamp_;
         topEdgeSource.propagate(1, &topEdge);
     }
@@ -218,13 +235,11 @@ void OrientationInterpreter::processTopEdge()
 
 void OrientationInterpreter::processFace()
 {
-    if (abs(data.z_) >= 300)
-    {
+    if (abs(data.z_) >= 300) {
         PoseData newFace;
         newFace.orientation_ = ((data.z_ <= 0) ? PoseData::FaceDown : PoseData::FaceUp);
 
-        if (newFace.orientation_ == PoseData::FaceDown)
-        {
+        if (newFace.orientation_ == PoseData::FaceDown) {
             if (topEdge.orientation_ != PoseData::Undefined) {
                 face.orientation_ = PoseData::FaceUp;
             } else {
@@ -234,8 +249,7 @@ void OrientationInterpreter::processFace()
             face.orientation_ = PoseData::FaceUp;
         }
 
-        if (face.orientation_ != previousFace.orientation_)
-        {
+        if (face.orientation_ != previousFace.orientation_) {
             previousFace.orientation_ = face.orientation_;
             face.timestamp_ = data.timestamp_;
             faceSource.propagate(1, &face);
@@ -255,7 +269,7 @@ void OrientationInterpreter::processOrientation()
 
     if (newPose.orientation_ != orientationData.orientation_) {
         orientationData.orientation_ = newPose.orientation_;
-        sensordLogT() << "New orientation value: " << orientationData.orientation_;
+        qCDebug(lcSensorFw) << "New orientation value: " << orientationData.orientation_;
         orientationData.timestamp_ = data.timestamp_;
         orientationSource.propagate(1, &orientationData);
     }

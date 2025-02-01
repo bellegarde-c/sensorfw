@@ -3,7 +3,8 @@
    @brief Sensord initiation point
 
    <p>
-   Copyright (C) 2009-2010 Nokia Corporation
+   Copyright (c) 2009 - 2010 Nokia Corporation
+   Copyright (c) 2025 Jollyboys Ltd.
 
    @author Semi Malinen <semi.malinen@nokia.com>
    @author Joep van Gassel <joep.van.gassel@nokia.com>
@@ -50,69 +51,97 @@
 #include "calibrationhandler.h"
 #include "parser.h"
 
-static QtMsgType logLevel;
-static QtMessageHandler previousMessageHandler;
+static void printUsage();
 
-static int normalizeLevel(QtMsgType type)
+enum LogLevel {
+    LevelCritical,
+    LevelWarning,
+    LevelInfo,
+    LevelDebug,
+    LevelCount
+};
+
+static const char * const nameForLevel[LevelCount] = {
+    "Critical",
+    "Warning",
+    "Info",
+    "Debug",
+};
+
+static const QtMsgType typeForLevel[LevelCount] = {
+    QtCriticalMsg,
+    QtWarningMsg,
+    QtInfoMsg,
+    QtDebugMsg,
+};
+
+static LogLevel logLevel = LevelDebug;
+
+static LogLevel levelForType(QtMsgType type)
 {
     /* Map QtMsgType enum values to something that hopefully
      * makes sense in less-than / greater-than sense too. */
     switch (type) {
-    case QtDebugMsg:
-        return 0;
-    case QtInfoMsg:
-        return 1;
-    case QtWarningMsg:
-        return 3;
     case QtCriticalMsg:
-        return 4;
+        return LevelCritical;
+    case QtWarningMsg:
+        return LevelWarning;
+    case QtInfoMsg:
+        return LevelInfo;
     default:
-        return static_cast<int>(type);
+        return LevelDebug;
     }
 }
 
-static void messageOutput(QtMsgType type, const QMessageLogContext &context, const QString &str)
+static void setLogLevel(LogLevel newLevel)
 {
-    if (normalizeLevel(type) < normalizeLevel(logLevel))
-        return;
+    logLevel = newLevel;
 
-    previousMessageHandler(type, context, str);
-}
+    // A bit nasty but simple way to get around qt logging macros that define const access
+    QLoggingCategory &sensorfwdCategory = const_cast<QLoggingCategory &>(lcSensorFw());
 
-void printUsage();
+    // As there is some logging also with qDebug() and co, adjust also default category
+    QLoggingCategory *defaultCategory = QLoggingCategory::defaultCategory();
 
-void signalUSR1(int param)
-{
-    Q_UNUSED(param);
-    if (logLevel != QtDebugMsg) {
-        logLevel = QtDebugMsg;
-        sensordLogW() << "Debug logging enabled";
-    }
-    else {
-        logLevel = QtWarningMsg;
-        sensordLogW() << "Debug logging disabled";
+    for (int level = 0; level < LevelCount; ++level) {
+        QtMsgType type = typeForLevel[level];
+        bool enable = level <= logLevel;
+        sensorfwdCategory.setEnabled(type, enable);
+        if (defaultCategory)
+            defaultCategory->setEnabled(type, enable);
     }
 }
 
-void signalUSR2(int param)
+static void signalUSR1(int param)
 {
     Q_UNUSED(param);
 
-    QStringList output;
+    if (logLevel <= LevelWarning) {
+        setLogLevel(LevelDebug);
+        qCWarning(lcSensorFw) << "Debug logging enabled";
+    } else {
+        setLogLevel(LevelWarning);
+        qCWarning(lcSensorFw) << "Debug logging disabled";
+    }
+}
 
-    output.append("Flushing sensord state");
-    output.append(QString("  Logging level: %1").arg(logLevel));
-    SensorManager::instance().printStatus(output);
+static void signalUSR2(int param)
+{
+    Q_UNUSED(param);
+
+    qCWarning(lcSensorFw) << "Flushing sensord state";
+    qCWarning(lcSensorFw).noquote() << QString("  Logging level: %1").arg(nameForLevel[logLevel]);
+    QStringList output = SensorManager::instance().printStatus();
 
     foreach (const QString& line, output) {
-        sensordLogW() << line.toLocal8Bit().data();
+        qCWarning(lcSensorFw) << line.toLocal8Bit().data();
     }
 }
 
-void signalINT(int param)
+static void signalINT(int param)
 {
     signal(param, SIG_DFL);
-    sensordLogD() << "Terminating ...";
+    qCInfo(lcSensorFw) << "Terminating ...";
     QCoreApplication::exit(0);
 }
 
@@ -133,7 +162,7 @@ private:
 SignalNotifier::SignalNotifier()
     : m_socketNotifier(0)
 {
-    sensordLogD() << "Setup async signal handlers";
+    qCInfo(lcSensorFw) << "Setup async signal handlers";
     if (pipe2(s_pipe, O_CLOEXEC) == -1) {
         qFatal("Failed to create a pipe for signal passunc");
     }
@@ -151,10 +180,11 @@ SignalNotifier::SignalNotifier()
 
 SignalNotifier::~SignalNotifier()
 {
-    sensordLogD() << "Reset async signal handlers";
-    for (size_t i = 0; s_signals[i] != -1; ++i )
+    qCInfo(lcSensorFw) << "Reset async signal handlers";
+    for (size_t i = 0; s_signals[i] != -1; ++i)
         signal(s_signals[i], SIG_DFL);
-    delete m_socketNotifier; m_socketNotifier = 0;
+    delete m_socketNotifier;
+    m_socketNotifier = nullptr;
     close(s_pipe[1]), s_pipe[1] = -1;
     close(s_pipe[0]), s_pipe[0] = -1;
 }
@@ -174,7 +204,7 @@ void SignalNotifier::handleSignalInput(int socket)
     if (read(s_pipe[0], &sig, sizeof sig) == -1) {
         // dontcare
     }
-    sensordLogD() << "Caught async signal"  << strsignal(sig);
+    qCInfo(lcSensorFw) << "Caught async signal"  << strsignal(sig);
     switch (sig) {
     case SIGINT:
     case SIGTERM:
@@ -198,33 +228,27 @@ const int SignalNotifier::s_signals[] =
 
 int main(int argc, char *argv[])
 {
-    previousMessageHandler = qInstallMessageHandler(messageOutput);
-
     QCoreApplication app(argc, argv);
     Parser parser(app.arguments());
 
-    if (parser.printHelp())
-    {
+    if (parser.printHelp()) {
         printUsage();
         app.exit(EXIT_SUCCESS);
         return 0;
-
     }
 
-    logLevel = parser.getLogLevel();
+    setLogLevel(levelForType(parser.getLogLevel()));
 
     const char* CONFIG_FILE_PATH = "/etc/sensorfw/sensord.conf";
     const char* CONFIG_DIR_PATH = "/etc/sensorfw/sensord.conf.d/";
 
     QString defConfigFile = CONFIG_FILE_PATH;
-    if(parser.configFileInput())
-    {
+    if (parser.configFileInput()) {
         defConfigFile = parser.configFilePath();
     }
 
     QString defConfigDir = CONFIG_DIR_PATH;
-    if(parser.configDirInput())
-    {
+    if (parser.configDirInput()) {
         defConfigDir = parser.configDirPath();
     }
 
@@ -237,28 +261,24 @@ int main(int argc, char *argv[])
         }
     }
 
-    if (!SensorFrameworkConfig::loadConfig(defConfigFile, defConfigDir))
-    {
-        sensordLogC() << "SensorFrameworkConfig file error! Load using default paths.";
-        if (!SensorFrameworkConfig::loadConfig(CONFIG_FILE_PATH, CONFIG_DIR_PATH))
-        {
-            sensordLogC() << "Which also failed. Bailing out";
+    if (!SensorFrameworkConfig::loadConfig(defConfigFile, defConfigDir)) {
+        qCCritical(lcSensorFw) << "SensorFrameworkConfig file error! Load using default paths.";
+        if (!SensorFrameworkConfig::loadConfig(CONFIG_FILE_PATH, CONFIG_DIR_PATH)) {
+            qCCritical(lcSensorFw) << "Which also failed. Bailing out";
             return 1;
         }
     }
 
-    if (parser.createDaemon())
-    {
+    if (parser.createDaemon()) {
         fflush(0);
 
         int pid = fork();
 
-        if(pid < 0)
-        {
-            sensordLogC() << "Failed to create a daemon: " << strerror(errno);
+        if (pid < 0) {
+            qCCritical(lcSensorFw) << "Failed to create a daemon: " << strerror(errno);
             exit(EXIT_FAILURE);
         } else if (pid > 0) {
-            sensordLogD() << "Created a daemon";
+            qCInfo(lcSensorFw) << "Created a daemon";
             _exit(EXIT_SUCCESS);
         }
     }
@@ -266,29 +286,25 @@ int main(int argc, char *argv[])
     SensorManager& sm = SensorManager::instance();
 
 #ifdef PROVIDE_CONTEXT_INFO
-    if (parser.contextInfo())
-    {
-        sensordLogD() << "Loading ContextSensor " << sm.loadPlugin("contextsensor");
-        sensordLogD() << "Loading ALSSensor " << sm.loadPlugin("alssensor");
+    if (parser.contextInfo()) {
+        qCInfo(lcSensorFw) << "Loading ContextSensor " << sm.loadPlugin("contextsensor");
+        qCInfo(lcSensorFw) << "Loading ALSSensor " << sm.loadPlugin("alssensor");
     }
 #endif
 
-    if (parser.magnetometerCalibration())
-    {
-        CalibrationHandler* calibrationHandler_ = new CalibrationHandler(NULL);
+    if (parser.magnetometerCalibration()) {
+        CalibrationHandler* calibrationHandler_ = new CalibrationHandler(nullptr);
         calibrationHandler_->initiateSession();
         QObject::connect(&sm, SIGNAL(resumeCalibration()), calibrationHandler_, SLOT(resumeCalibration()));
         QObject::connect(&sm, SIGNAL(stopCalibration()), calibrationHandler_, SLOT(stopCalibration()));
     }
 
-    if (!sm.registerService())
-    {
-        sensordLogW() << "Failed to register service on D-Bus. Aborting.";
+    if (!sm.registerService()) {
+        qCWarning(lcSensorFw) << "Failed to register service on D-Bus. Aborting.";
         exit(EXIT_FAILURE);
     }
 
-    if (parser.notifySystemd())
-    {
+    if (parser.notifySystemd()) {
         sd_notify(0, "READY=1");
     }
 
@@ -296,7 +312,7 @@ int main(int argc, char *argv[])
     int ret = app.exec();
     delete signalNotifier; signalNotifier = 0;
 
-    sensordLogD() << "Exiting...";
+    qCInfo(lcSensorFw) << "Exiting...";
     SensorFrameworkConfig::close();
 
     /* Backends that use binder ipc can end up deadlocked at
@@ -328,8 +344,8 @@ void printUsage()
     qDebug() << " -l=N, --log-level=<level>        Use given logging level. Messages are logged for";
     qDebug() << "                                  the given and higher priority levels. Level";
     qDebug() << "                                  can also be notched up by sending SIGUSR1 to";
-    qDebug() << "                                  the process. Valid values for N are: 'test',";
-    qDebug() << "                                  'debug', 'warning', 'critical'.\n";
+    qDebug() << "                                  the process. Valid values for N are: 'debug',";
+    qDebug() << "                                  'info', 'warning', 'critical'.\n";
     qDebug() << " -c=P, --config-file=<path>       Load configuration from given path. By default";
     qDebug() << "                                  /etc/sensorfw/sensord.conf is used.\n";
     qDebug() << " --no-context-info                Do not provide context information for context";

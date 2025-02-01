@@ -3,7 +3,8 @@
    @brief Sensord initiation point
 
    <p>
-   Copyright (C) 2009-2010 Nokia Corporation
+   Copyright (c) 2009 - 2010 Nokia Corporation
+   Copyright (c) 2025 Jollyboys Ltd.
 
    @author Lihan Guo <ext-lihan.guo@nokia.com>
 
@@ -47,18 +48,18 @@ Parser::~Parser()
 
 void Parser::parsingCommandLine(QStringList arguments)
 {
-    foreach (const QString& arg, arguments)
-    {
+    foreach (const QString& arg, arguments) {
         QStringList data;
         QString opt = arg.trimmed();
 
-        if (opt.startsWith("-l=") || opt.startsWith("--log-level"))
-        {
+        if (opt.startsWith("-l=") || opt.startsWith("--log-level")) {
             data = opt.split("=");
             QString logLevel = data.at(1);
             if (logLevel == "test")
                 logLevel_ = QtDebugMsg;
             else if (logLevel == "debug")
+                logLevel_ = QtDebugMsg;
+            else if (logLevel == "info")
                 logLevel_ = QtInfoMsg;
             else if (logLevel == "warning")
                 logLevel_ = QtWarningMsg;
@@ -66,33 +67,29 @@ void Parser::parsingCommandLine(QStringList arguments)
                 logLevel_ = QtCriticalMsg;
             else
                 logLevel_ = QtWarningMsg;
-        }
-        else if (opt.startsWith("-c=") || opt.startsWith("--config-file"))
-        {
+        } else if (opt.startsWith("-c=") || opt.startsWith("--config-file")) {
             data = opt.split("=");
             configFile_ = true;
             configFilePath_ = data.at(1);
-        }
-        else if (opt.startsWith("--config-dir"))
-        {
+        } else if (opt.startsWith("--config-dir")) {
             data = opt.split("=");
             configDir_ = true;
             configDirPath_ = data.at(1);
-        }
-        else if (opt.startsWith("--no-context-info"))
+        } else if (opt.startsWith("--no-context-info")) {
             contextInfo_ = false;
-        else if (opt.startsWith("--no-magnetometer-bg-calibration"))
+        } else if (opt.startsWith("--no-magnetometer-bg-calibration")) {
             magnetometerCalibration_ = false;
-        else if (opt.startsWith("-d") || opt.startsWith("--daemon"))
+        } else if (opt.startsWith("-d") || opt.startsWith("--daemon")) {
             daemon_ = true, systemd_ = false;
-        else if (opt.startsWith("-s") || opt.startsWith("--systemd"))
+        } else if (opt.startsWith("-s") || opt.startsWith("--systemd")) {
             systemd_ = true, daemon_ = false;
-        else if (opt.startsWith("-h") || opt.startsWith("--help"))
+        } else if (opt.startsWith("-h") || opt.startsWith("--help")) {
             printHelp_ = true;
-        else if (opt.startsWith("--device-info"))
+		} else if (opt.startsWith("--device-info")) {
             deviceInfo_ = true;
-        else if (opt.startsWith("-"))
+		} else if (opt.startsWith("-")) {
             std::cerr << "Unknown option: " << opt.toStdString() << std::endl;
+		}
     }
 }
 
